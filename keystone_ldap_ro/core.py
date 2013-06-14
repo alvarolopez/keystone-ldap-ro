@@ -16,7 +16,6 @@
 
 import uuid
 
-
 from keystone.common import logging
 from keystone.common import wsgi
 from keystone import exception
@@ -30,7 +29,10 @@ LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
 opts = [
-        cfg.BoolOpt("autocreate_users", default=False),
+    cfg.BoolOpt("autocreate_users",
+                    default=False,
+                    help="If enabled, users will be created automatically "
+                    "in the local Identity backend (default False)."),
 ]
 CONF.register_opts(opts, group="ldap_ro")
 
@@ -41,11 +43,43 @@ CONTEXT_ENV = keystone.middleware.CONTEXT_ENV
 class LDAPAuthROMiddleware(wsgi.Middleware):
     def __init__(self, *args, **kwargs):
         self.identity_api = identity.Manager()
-        self.ldap_identity = ldap.Identity()
+        try:
+            self.config_file = kwargs.pop("config_file")
+        except KeyError:
+            raise exception.PasteConfigNotFound(config_file="(no config file "
+                                                            "defined)")
 
         self.domain = CONF.identity.default_domain_id or "default"
 
         super(LDAPAuthROMiddleware, self).__init__(*args, **kwargs)
+
+    @classmethod
+    def factory(cls, global_config, **local_config):
+        # NOTE(aloga): This can be removed once the following bug is fixed
+        # https://bugs.launchpad.net/keystone/+bug/1190978
+        def _factory(app):
+            conf = global_config.copy()
+            conf.update(local_config)
+            return cls(app, **local_config)
+        return _factory
+
+    def _do_ldap_lookup(self, username, password):
+        """Do the ldap user authentication."""
+        # NOTE(aloga): This might be an ugly hack so as to have several LDAP
+        # servers with different configurations. but it works pretty well. We
+        # load the LDAp configuration for our backend, make the lookup and then
+        # we restore the configuration to the original one.
+        oldcfgfiles = CONF.config_file
+        CONF(project="keystone", default_config_files=[self.config_file])
+
+        self.ldap_identity = ldap.Identity()
+        try:
+            auth = self.ldap_identity.authenticate(user_id=username,
+                                                   password=password)
+        finally:
+            CONF(project="keystone", default_config_files=oldcfgfiles)
+
+        return auth
 
     def is_applicable(self, request):
         """Check if the request is applicable for this handler or not"""
@@ -76,8 +110,7 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
 
         try:
             # Authenticate user on LDAP
-            auth = self.ldap_identity.authenticate(user_id=username,
-                                                   password=password)
+            auth = self._do_ldap_lookup(username, password)
         except AssertionError:
             # The user is not on LDAp, or auth has failed.
             return self.application
