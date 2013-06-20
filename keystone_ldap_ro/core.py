@@ -1,6 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
-# Copyright 2012 Spanish National Research Council
+# Copyright 2013 Spanish National Research Council
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
@@ -37,7 +37,12 @@ opts = [
 CONF.register_opts(opts, group="ldap_ro")
 
 PARAMS_ENV = keystone.middleware.PARAMS_ENV
-CONTEXT_ENV = keystone.middleware.CONTEXT_ENV
+
+
+class LDAPConfigNotFound(exception.UnexpectedError):
+     """The Keystone LDAP-ro configuration file %(config_file)s could not be
+     found.
+     """
 
 
 class LDAPAuthROMiddleware(wsgi.Middleware):
@@ -46,8 +51,7 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
         try:
             self.config_file = kwargs.pop("config_file")
         except KeyError:
-            raise exception.PasteConfigNotFound(config_file="(no config file "
-                                                            "defined)")
+            raise LDAPConfigNotFound(config_file="(no config file defined)")
 
         self.domain = CONF.identity.default_domain_id or "default"
 
@@ -56,7 +60,8 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
     @classmethod
     def factory(cls, global_config, **local_config):
         # NOTE(aloga): This can be removed once the following bug is fixed
-        # https://bugs.launchpad.net/keystone/+bug/1190978
+        # https://bugs.launchpad.net/keystone/+bug/1190978 but not before
+        # Havana for sure.
         def _factory(app):
             conf = global_config.copy()
             conf.update(local_config)
@@ -89,8 +94,6 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
             if (auth["passwordCredentials"]["username"] and
                 auth["passwordCredentials"]["password"]):
                 return True
-            else:
-                raise exception.ValidationError("Error in JSON")
         return False
 
     def process_request(self, request):
@@ -105,14 +108,16 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
 
         username = params["auth"]["passwordCredentials"]["username"]
         password = params["auth"]["passwordCredentials"]["password"]
-        tenant   = params["auth"]["passwordCredentials"].get("tenantName",
-                                                             None)
 
         try:
             # Authenticate user on LDAP
             auth = self._do_ldap_lookup(username, password)
         except AssertionError:
             # The user is not on LDAp, or auth has failed.
+            return self.application
+        except ldap.LDAPError as e:
+            LOG.error(_("Unable to contact to LDAP server"))
+            LOG.exception(e)
             return self.application
 
         user_ref = auth[0]
