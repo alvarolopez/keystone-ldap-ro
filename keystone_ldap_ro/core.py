@@ -31,9 +31,13 @@ LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 opts = [
     cfg.BoolOpt("autocreate_users",
-                    default=False,
-                    help="If enabled, users will be created automatically "
-                    "in the local Identity backend (default False)."),
+                default=False,
+                help="If enabled, users will be created automatically "
+                     "in the local Identity backend (default False)."),
+    cfg.StrOpt("default_tenant",
+                default="",
+                help="If specified users will be automatically "
+                     "added to this tenant."),
 ]
 CONF.register_opts(opts, group="ldap_ro")
 
@@ -87,6 +91,38 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
 
         return auth
 
+    def _do_create_user(self, user_ref):
+        user_name = user_ref["name"]
+        user_id = uuid.uuid4().hex
+        LOG.info(_("Autocreating REMOTE_USER %s with id %s") %
+                  (user_name, user_id))
+        user = {
+            "id": user_id,
+            "name": user_name,
+            "enabled": True,
+            "domain_id": self.domain,
+            "email": user_ref.get("email", "noemail"),
+        }
+        self.identity_api.create_user(self.identity_api,
+                                      user_id,
+                                      user)
+        if CONF.ldap_ro.default_tenant:
+            try: 
+                tenant_ref = self.identity_api.get_project_by_name(
+                    self.identity_api, CONF.ldap_ro.default_tenant,
+                    self.domain)
+            except exception.ProjectNotFound:
+                raise
+            user_tenants = self.identity_api.get_projects_for_user(
+                self.identity_api, user_id)
+            if tenant_ref["id"] not in user_tenants:
+                LOG.info(_("Automatically adding user %s to tenant %s") %
+                        (user_name, tenant_ref["name"]))
+                self.identity_api.add_user_to_project(
+                    self.identity_api,
+                    tenant_ref["id"],
+                    user_id)
+
     def is_applicable(self, request):
         """Check if the request is applicable for this handler or not"""
         params = request.environ.get(PARAMS_ENV, {})
@@ -130,17 +166,6 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
                 self.domain)
         except exception.UserNotFound:
             if CONF.ldap_ro.autocreate_users:
-                user_id = uuid.uuid4().hex
-                LOG.info(_("Autocreating REMOTE_USER %s with id %s") %
-                        (user_id, user_name))
-                user = {
-                    "id": user_id,
-                    "name": user_name,
-                    "enabled": True,
-                    "domain_id": self.domain,
-                }
-                self.identity_api.create_user(self.identity_api,
-                                              user_id,
-                                              user)
+                self._do_create_user(user_ref)
 
         request.environ['REMOTE_USER'] = user_name
