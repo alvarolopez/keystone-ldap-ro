@@ -14,13 +14,14 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from ldap import LDAPError
 import uuid
 
 from keystone.common import logging
 from keystone.common import wsgi
 from keystone import exception
 from keystone import identity
-from keystone.identity.backends import ldap
+from keystone.identity.backends import ldap as keystone_ldap
 import keystone.middleware
 
 from oslo.config import cfg
@@ -77,7 +78,7 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
         oldcfgfiles = CONF.config_file
         CONF(project="keystone", default_config_files=[self.config_file])
 
-        self.ldap_identity = ldap.Identity()
+        self.ldap_identity = keystone_ldap.Identity()
         try:
             auth = self.ldap_identity.authenticate(user_id=username,
                                                    password=password)
@@ -115,7 +116,7 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
         except AssertionError:
             # The user is not on LDAp, or auth has failed.
             return self.application
-        except ldap.LDAPError as e:
+        except LDAPError as e:
             LOG.error(_("Unable to contact to LDAP server"))
             LOG.exception(e)
             return self.application
