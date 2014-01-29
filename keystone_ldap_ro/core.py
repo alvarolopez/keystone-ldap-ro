@@ -62,17 +62,6 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
 
         super(LDAPAuthROMiddleware, self).__init__(*args, **kwargs)
 
-    @classmethod
-    def factory(cls, global_config, **local_config):
-        # NOTE(aloga): This can be removed once the following bug is fixed
-        # https://bugs.launchpad.net/keystone/+bug/1190978 but not before
-        # Havana for sure.
-        def _factory(app):
-            conf = global_config.copy()
-            conf.update(local_config)
-            return cls(app, **local_config)
-        return _factory
-
     def _do_ldap_lookup(self, username, password):
         """Do the ldap user authentication."""
         # NOTE(aloga): This might be an ugly hack so as to have several LDAP
@@ -103,25 +92,21 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
             "domain_id": self.domain,
             "email": user_ref.get("email", "noemail"),
         }
-        self.identity_api.create_user(self.identity_api,
-                                      user_id,
+        self.identity_api.create_user(user_id,
                                       user)
         if CONF.ldap_ro.default_tenant:
-            try: 
+            try:
                 tenant_ref = self.identity_api.get_project_by_name(
-                    self.identity_api, CONF.ldap_ro.default_tenant,
+                    CONF.ldap_ro.default_tenant,
                     self.domain)
             except exception.ProjectNotFound:
                 raise
-            user_tenants = self.identity_api.get_projects_for_user(
-                self.identity_api, user_id)
+            user_tenants = self.identity_api.list_projects_for_user(user_id)
             if tenant_ref["id"] not in user_tenants:
                 LOG.info(_("Automatically adding user %s to tenant %s") %
                         (user_name, tenant_ref["name"]))
-                self.identity_api.add_user_to_project(
-                    self.identity_api,
-                    tenant_ref["id"],
-                    user_id)
+                self.identity_api.add_user_to_project(tenant_ref["id"],
+                                                      user_id)
 
     def is_applicable(self, request):
         """Check if the request is applicable for this handler or not"""
@@ -160,10 +145,7 @@ class LDAPAuthROMiddleware(wsgi.Middleware):
         user_ref = auth[0]
         user_name = user_ref["name"]
         try:
-            self.identity_api.get_user_by_name(
-                self.identity_api,
-                user_name,
-                self.domain)
+            self.identity_api.get_user_by_name(user_name, self.domain)
         except exception.UserNotFound:
             if CONF.ldap_ro.autocreate_users:
                 self._do_create_user(user_ref)
