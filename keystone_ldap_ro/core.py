@@ -23,6 +23,7 @@ from keystone import exception
 from keystone import identity
 from keystone.identity.backends import ldap as keystone_ldap
 import keystone.middleware
+from keystone.openstack.common.gettextutils import _
 
 from oslo.config import cfg
 
